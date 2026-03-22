@@ -1,0 +1,288 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [vector]
+}
+
+// ========================================
+// 用户系统
+// ========================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  nickname      String?
+  avatar        String?
+  passwordHash  String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // 会员信息
+  membershipTier  MembershipTier @default(FREE)
+  membershipExpAt DateTime?
+  coinBalance     Int            @default(0)
+
+  // 今日使用量
+  dailyMessages   Int      @default(0)
+  dailyResetAt    DateTime @default(now())
+
+  // 关联
+  accounts   Account[]
+  sessions   Session[]
+  characters Character[]
+  chats      Chat[]
+  messages   Message[]
+  orders     Order[]
+  memories   Memory[]
+
+  @@map("users")
+}
+
+enum MembershipTier {
+  FREE
+  BASIC
+  PREMIUM
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ========================================
+// 角色卡系统
+// ========================================
+
+model Character {
+  id          String @id @default(cuid())
+  creatorId   String
+  name        String
+  description String // 角色描述（外貌、背景、性格）
+  personality String @default("") // 性格简述
+  scenario    String @default("") // 对话场景
+  firstMessage String // 角色第一条消息
+  exampleMessages String @default("") // 示例对话
+
+  // 高级设定
+  systemPrompt          String @default("") // 覆盖默认system prompt
+  postHistoryInstructions String @default("") // 历史消息后的指令
+  alternateGreetings    String[] // 备选开场白
+  tags                  String[] // 标签
+
+  // 角色卡元数据
+  avatar       String? // 头像URL
+  creatorNotes String  @default("") // 给使用者看的说明
+  version      String  @default("1.0")
+  isPublic     Boolean @default(false) // 是否公开
+  isPreset     Boolean @default(false) // 是否为预装角色
+
+  // 统计
+  chatCount    Int @default(0)
+  messageCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  creator    User              @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  chats      Chat[]
+  worldBooks WorldBookEntry[]
+  memories   Memory[]
+
+  @@index([creatorId])
+  @@index([isPublic])
+  @@map("characters")
+}
+
+// ========================================
+// 对话系统
+// ========================================
+
+model Chat {
+  id          String @id @default(cuid())
+  userId      String
+  characterId String
+  title       String @default("新对话")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@index([userId])
+  @@index([characterId])
+  @@map("chats")
+}
+
+model Message {
+  id     String      @id @default(cuid())
+  chatId String
+  userId String
+  role   MessageRole
+  content String
+
+  // token消耗
+  tokenCount Int @default(0)
+
+  createdAt DateTime @default(now())
+
+  // 关联
+  chat Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@map("messages")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+// ========================================
+// 记忆系统
+// ========================================
+
+model Memory {
+  id          String     @id @default(cuid())
+  userId      String
+  characterId String
+  content     String
+  memoryType  MemoryType
+  importance  Float      @default(0.5) // 重要性评分 0-1
+  embedding   Unsupported("vector(1536)")? // 向量嵌入
+
+  createdAt DateTime @default(now())
+
+  // 关联
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([userId, characterId])
+  @@map("memories")
+}
+
+enum MemoryType {
+  FACT      // 事实（"用户喜欢猫"）
+  EVENT     // 事件（"用户提到昨天去了公园"）
+  SUMMARY   // 对话摘要
+  EMOTIONAL // 情感记忆
+}
+
+// ========================================
+// 世界书系统
+// ========================================
+
+model WorldBookEntry {
+  id          String @id @default(cuid())
+  characterId String
+  name        String @default("") // 条目名称
+  keywords    String[] // 触发关键词
+  content     String // 触发时注入的文本
+  enabled     Boolean @default(true)
+
+  // 高级设置
+  priority    Int     @default(10)  // 优先级（越大越先注入）
+  maxTokens   Int     @default(200) // 最大token数
+  sticky      Int     @default(0)   // 粘滞轮数（激活后保持N轮）
+  cooldown    Int     @default(0)   // 冷却轮数
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  character Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@index([characterId])
+  @@map("world_book_entries")
+}
+
+// ========================================
+// 支付系统
+// ========================================
+
+model Order {
+  id          String      @id @default(cuid())
+  userId      String
+  orderNo     String      @unique // 订单号
+  amount      Int         // 金额（分）
+  status      OrderStatus @default(PENDING)
+  productType ProductType
+  productName String      // 商品名称
+
+  // 支付信息
+  paymentMethod String?  // wechat / alipay
+  tradeNo       String?  // 第三方支付交易号
+  paidAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 关联
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([orderNo])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING   // 待支付
+  PAID      // 已支付
+  EXPIRED   // 已过期
+  REFUNDED  // 已退款
+}
+
+enum ProductType {
+  MEMBERSHIP_BASIC       // 基础会员月费
+  MEMBERSHIP_BASIC_YEAR  // 基础会员年费
+  MEMBERSHIP_PREMIUM     // 高级会员月费
+  MEMBERSHIP_PREMIUM_YEAR // 高级会员年费
+  COIN_PACK              // 虚拟货币充值
+}
